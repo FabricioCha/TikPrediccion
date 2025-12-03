@@ -10,7 +10,7 @@ _log = logging.getLogger("yfinance")
 _log.setLevel(logging.CRITICAL)
 _log.propagate = False
 from pybackend.services.catalog import CATEGORIES, get_symbols_by_category
-from pybackend.services.recommender import recommend_for_symbol
+from pybackend.services.recommender import recommend_for_symbol, recommend_similar_stocks
 
 st.set_page_config(page_title="Stock Advisor BI", layout="wide")
 st.title("Stock Advisor BI")
@@ -50,7 +50,13 @@ def cached_reco(sym):
 if "prefs" not in st.session_state:
     st.session_state["prefs"] = {}
 
+if "analyzed" not in st.session_state:
+    st.session_state["analyzed"] = False
+
 if st.button("Analizar Mercado"):
+    st.session_state["analyzed"] = True
+
+if st.session_state["analyzed"]:
     metrics = cached_metrics(symbols)
     df = pd.DataFrame(metrics)
     st.subheader("Métricas")
@@ -93,20 +99,73 @@ if st.button("Analizar Mercado"):
                 "sentimiento": sent,
             })
             reco = cached_reco(sym)
+            conf_val = reco.get("confidence")
+            conf_str = f"{conf_val:.1%}" if conf_val is not None else "N/A"
             st.write({
                 "predicción": reco.get("direction"),
                 "acción": reco.get("action"),
-                "confianza": reco.get("confidence"),
+                "confianza": conf_str,
             })
             st.write("Porque comprar:", reason)
             st.write("Motivo interno:", reco.get("internal_reason"))
-            like_key = f"like_{sym}"
-            dislike_key = f"dislike_{sym}"
-            cols_btn = st.columns(2)
-            if cols_btn[0].button("👍 Me gusta", key=like_key):
-                st.session_state["prefs"][sym] = "like"
-            if cols_btn[1].button("👎 No me gusta", key=dislike_key):
+            # Mecanismo de Fricción Cognitiva
+            with st.expander("👍 Evaluar / Me gusta"):
+                user_reason = st.radio(
+                    "¿Cuál es el motivo principal de tu elección?",
+                    [
+                        "A: Perfil de Bajo Riesgo (Seguridad)",
+                        "B: Potencial de Alto Crecimiento (Retorno)",
+                        "C: Noticias y Sentimiento Positivo"
+                    ],
+                    key=f"reason_{sym}"
+                )
+                
+                if st.button("Confirmar Voto", key=f"btn_conf_{sym}"):
+                    # Lógica de validación (Cross-Check)
+                    curr_group = group if group else "Mixto"
+                    curr_dir = reco.get("direction", "Neutral")
+                    curr_sent = reco.get("sentiment") or 0.0
+                    
+                    valid = True
+                    warning_msg = ""
+                    
+                    if user_reason.startswith("A"):
+                        if curr_group != "Refugio Seguro":
+                            valid = False
+                            warning_msg = f"Elegiste Seguridad, pero el activo es '{curr_group}'."
+                    elif user_reason.startswith("B"):
+                        if curr_dir != "Sube":
+                            valid = False
+                            warning_msg = f"Buscas Crecimiento, pero la predicción es '{curr_dir}'."
+                    elif user_reason.startswith("C"):
+                        if curr_sent <= 0:
+                            valid = False
+                            warning_msg = f"Te basas en Sentimiento, pero el score es {curr_sent:.2f} (no positivo)."
+                    
+                    if valid:
+                        st.session_state["prefs"][sym] = "like_verified"
+                        st.session_state.pop(f"warn_{sym}", None)
+                        st.success("¡Elección consistente! Guardado.")
+                        st.rerun()
+                    else:
+                        st.session_state[f"warn_{sym}"] = warning_msg
+                        st.rerun()
+
+                # Manejo de advertencia y confirmación secundaria
+                if f"warn_{sym}" in st.session_state:
+                    st.warning(f"Tu elección contradice los datos: {st.session_state[f'warn_{sym}']}")
+                    st.write("¿Deseas proceder?")
+                    if st.button("Sí, proceder de todos modos", key=f"btn_force_{sym}"):
+                        st.session_state["prefs"][sym] = "like_verified"
+                        st.session_state.pop(f"warn_{sym}", None)
+                        st.success("Guardado bajo tu responsabilidad.")
+                        st.rerun()
+
+            if st.button("👎 No me gusta", key=f"dislike_{sym}"):
                 st.session_state["prefs"][sym] = "dislike"
+                st.session_state.pop(f"warn_{sym}", None)
+                st.rerun()
+
             pref = st.session_state["prefs"].get(sym)
             if pref:
                 st.caption(f"Preferencia: {pref}")
@@ -126,4 +185,37 @@ if st.button("Analizar Mercado"):
         st.write(headlines)
         sent = cached_sent(headlines)
         st.write({"sentiment": sent, "porque": generate_reason(headlines)})
+        
+        # -----------------------------------------------------
+        # Módulo de Similaridad (k-NN con Manhattan Distance)
+        # -----------------------------------------------------
+        st.markdown("---")
+        st.subheader(f"Acciones Similares a {sel}")
+        st.caption("Basado en proximidad Manhattan (PE, Beta, Volatilidad, Retorno, Sentimiento)")
+        
+        # Recolectar datos de todo el pool visible para comparar
+        pool_data = []
+        for s in symbols:
+            pool_data.append(cached_reco(s))
+            
+        similar_stocks = recommend_similar_stocks(sel, pool_data, k=4)
+        
+        if similar_stocks:
+            scols = st.columns(len(similar_stocks))
+            for i, item in enumerate(similar_stocks):
+                with scols[i]:
+                    s_sym = item["symbol"]
+                    dist = item["distance"]
+                    feats = item["features"]
+                    
+                    st.markdown(f"**{s_sym}**")
+                    st.caption(f"Distancia: {dist:.4f}")
+                    st.json({
+                        "PE": f"{feats['pe']:.1f}",
+                        "Beta": f"{feats['beta']:.2f}",
+                        "Vol": f"{feats['volatility']:.3f}",
+                        "Sent": f"{feats['sentiment']:.2f}"
+                    })
+        else:
+            st.info("No se encontraron acciones similares en el conjunto actual.")
 

@@ -2,6 +2,7 @@ from typing import Dict, Any
 from pybackend.services.finance import get_ticker_info, get_historical, compute_metrics
 from pybackend.services.ml import forecast_next_price
 from pybackend.services.sentiment import fetch_headlines, sentiment_score, generate_reason
+from pybackend.services.similarity import find_similar_stocks
 
 def recommend_for_symbol(symbol: str) -> Dict[str, Any]:
     info = get_ticker_info(symbol)
@@ -58,4 +59,11 @@ def recommend_for_symbol(symbol: str) -> Dict[str, Any]:
         "info": info,
         "sentiment": sent,
     }
+
+def recommend_similar_stocks(symbol: str, pool_data: list, k: int = 5):
+    """
+    Wrapper para encontrar acciones similares usando el módulo de similaridad.
+    pool_data debe ser una lista de resultados previos de recommend_for_symbol.
+    """
+    return find_similar_stocks(symbol, pool_data, k)
 

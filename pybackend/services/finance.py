@@ -4,37 +4,16 @@ import random
 from typing import List, Dict, Optional
 
 def _get_session():
-    try:
-        import requests_cache
-        base = requests_cache.CachedSession('yfinance.cache', expire_after=900)
-        base.headers.update({'User-Agent': 'Mozilla/5.0'})
-        class _TimeoutWrapper:
-            def __init__(self, s, t=4):
-                self._s = s
-                self._t = t
-            def request(self, *args, **kwargs):
-                kwargs.setdefault('timeout', self._t)
-                return self._s.request(*args, **kwargs)
-            def __getattr__(self, name):
-                return getattr(self._s, name)
-        return _TimeoutWrapper(base)
-    except Exception:
-        try:
-            import requests
-            base = requests.Session()
-            base.headers.update({'User-Agent': 'Mozilla/5.0'})
-            class _TimeoutWrapper:
-                def __init__(self, s, t=4):
-                    self._s = s
-                    self._t = t
-                def request(self, *args, **kwargs):
-                    kwargs.setdefault('timeout', self._t)
-                    return self._s.request(*args, **kwargs)
-                def __getattr__(self, name):
-                    return getattr(self._s, name)
-            return _TimeoutWrapper(base)
-        except Exception:
-            return None
+    # requests_cache es incompatible con las nuevas versiones de yfinance que usan curl_cffi
+    # Se elimina el uso de caché persistente y se devuelve None o una sesión requests simple
+    return None
+
+    # El bloque anterior causaba conflictos con curl_cffi
+    # try:
+    #     import requests_cache
+    #     base = requests_cache.CachedSession('yfinance.cache', expire_after=900)
+    #     # ...
+
 
 def _stooq_download(symbol: str, period_days: int = 180):
     try:
@@ -130,7 +109,8 @@ def get_historical(symbol: str, period: str = "90d"):
             if df is not None and not df.empty:
                 _HIST_CACHE[cache_key] = df
                 return df
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR CRÍTICO] Fallo al descargar {symbol} en get_historical (Ticker.history): {str(e)}")
             pass
         try:
             kwargs = {"period": period, "interval": "1d", "progress": False, "auto_adjust": True, "threads": False}
@@ -140,7 +120,8 @@ def get_historical(symbol: str, period: str = "90d"):
             if df is not None and not df.empty:
                 _HIST_CACHE[cache_key] = df
                 return df
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR CRÍTICO] Fallo al descargar {symbol} en get_historical (yf.download): {str(e)}")
             pass
         time.sleep(0.5 + random.random()*0.5)
     # Fallback to Stooq CSV
